@@ -67,8 +67,8 @@ static enum pad_hid_layout pad_hid_layout_for(int nin, int vid, int pid, const u
 static inline int pad_dupes_want(int n, int listed, int read, int due) { return n < 2 || n <= listed ? 0 : read || due ? 1 : -1; }
 
 // DM_HID_MAP: comma-separated NAME=usage entries over the layout's map (an unknown name or a usage past 32 is skipped). Nintendo's report 0x3F uses
-// usages 1 B, 2 A, 3 Y, 4 X, 5 / 6 L / R, 7 / 8 ZL / ZR, 9 minus, 10 plus, 11 / 12 stick clicks, 13 Home, 14 Capture. ab_xbox (DM_PAD_AB=xbox) swaps A and B of a layout
-// read by position (the default and Xbox ones, not Nintendo's, read by its labels, or the Taiko drum's) before those entries apply.
+// usages 1 B, 2 A, 3 Y, 4 X, 5 / 6 L / R, 7 / 8 ZL / ZR, 9 minus, 10 plus, 11 / 12 stick clicks, 13 Home, 14 Capture. ab_xbox (DM_PAD_AB=xbox) swaps A and B of every layout
+// before those entries apply, so A is the bottom button as on Xbox and PlayStation, a Nintendo pad's too (pad_apple.h dm_pad_face_ab does the same).
 static void pad_hid_init(pad_hid *h, const char *map, enum pad_hid_layout layout, int ab_xbox) {
     static const uint8_t default_map[16] = {2, 1, 5, 4, 14, 15, 7, 8, 9, 10, 12, 11};
     const uint8_t *button_map = default_map;
@@ -80,7 +80,7 @@ static void pad_hid_init(pad_hid *h, const char *map, enum pad_hid_layout layout
     }
     memset(h, 0, sizeof *h); h->hat = -1; h->layout = layout;
     memcpy(h->map, button_map, sizeof h->map);
-    if (ab_xbox && (layout == PAD_HID_DEFAULT || layout == PAD_HID_X360)) { uint8_t a = h->map[0]; h->map[0] = h->map[1]; h->map[1] = a; }
+    if (ab_xbox) { uint8_t a = h->map[0]; h->map[0] = h->map[1]; h->map[1] = a; }
     for (int a = 0; a < PH_AXES; a++) h->axis[a] = a >= PH_BRAKE ? -1 : 0;
     for (const char *s = map; s && *s; s = strchr(s, ',') ? strchr(s, ',') + 1 : "") {
         const char *eq = strchr(s, '='), *end = strchr(s, ','); if (!eq || (end && eq > end)) continue;

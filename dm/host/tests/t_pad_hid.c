@@ -52,7 +52,10 @@ int main(void) {
     h.buttons = 1u << 1; CHECK(pad_hid_buttons(&h) == DM_BTN_B);             // usage 2 (right) is B
     pad_hid_init(&h, "A=2", PAD_HID_DEFAULT, 1);
     h.buttons = 1u << 1; CHECK(pad_hid_buttons(&h) == (DM_BTN_A | DM_BTN_B)); // DM_HID_MAP entries still apply over the swapped default
-    pad_hid_init(&h, NULL, PAD_HID_NINTENDO, 1); h.buttons = 1u << 1; CHECK(pad_hid_buttons(&h) == DM_BTN_A);   // a Nintendo pad keeps its labels
+    pad_hid_init(&h, NULL, PAD_HID_NINTENDO, 1);                             // a Nintendo pad too: its bottom button (B, usage 1) is A, as GameController's pads (dm_pad_face_ab)
+    h.buttons = 1u << 0; CHECK(pad_hid_buttons(&h) == DM_BTN_A);
+    h.buttons = 1u << 1; CHECK(pad_hid_buttons(&h) == DM_BTN_B);
+    pad_hid_init(&h, NULL, PAD_HID_TAIKO, 1); h.buttons = 1u << 1; CHECK(pad_hid_buttons(&h) == DM_BTN_A);   // and the drum: its B (usage 2) is A
     pad_hid_init(&h, NULL, PAD_HID_DEFAULT, 0);
     CHECK(pad_hid_hat(1, 1, 8) == 0 && pad_hid_hat(0, 1, 8) == -1 && pad_hid_hat(8, 0, 7) == -1 && pad_hid_hat(15, 0, 15) == -1);
     { static const uint64_t dir[8] = {DM_BTN_UP, DM_BTN_UP | DM_BTN_RIGHT, DM_BTN_RIGHT, DM_BTN_RIGHT | DM_BTN_DOWN,   // the hat's eight values, clockwise from up
