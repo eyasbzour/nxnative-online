@@ -281,8 +281,6 @@ private struct LauncherView: View {
                     }
                 }
             }
-                }
-            }
             ButtonMappingSection(fixed: padMapFixed)
             if vpnShown {
                 VpnSection(on: vpnFixed ? .constant(getenv("DM_NET_VPN").map { String(cString: $0) == "1" } ?? false) : $vpnOn,
