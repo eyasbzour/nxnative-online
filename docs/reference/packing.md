@@ -17,6 +17,13 @@
 - **Found on:** [Diablo II: Resurrected](../../dm/games/0100726014352000/README.md), whose separate licence-only DLC package was truncated ([issue #2013](https://github.com/seedds/nxnative/issues/2013)). Main now has the shared [CASC/SHAD reader](shaders.md#blizzards-casc-storage-and-shad-containers); that separate shader-discovery fix does not repair missing package bytes. The reported base game alone (v0) remains unchecked, as the game note records.
 - **Check:** `dm/tools/tests/test_pfs0_storage.py` exercises synthetic payload truncation, out-of-range and overflowing spans, an empty file at EOF, and the CLI's damaged-input exit with and without `--allow-damaged`, with both normal and missing-final-NUL name tables.
 
+### DLC extraction rejects an archived filename
+
+- **Symptom:** `nx_extract --aoc --romfs-image` stops with `ResultFsInvalidCharacter (2002-6004)` after selecting the add-on's data NCA.
+- **Cause:** LibHac 0.19 enumerates a RomFS directory named `D:`, then rejects the colon when the string-based file-open overload validates the full path.
+- **Fix:** for this result on a LibHac RomFS, the image writer uses the path it got from archive enumeration with LibHac's typed file-open overload. Reads still go through the NCA's integrity-checked storage. The image preserves the original bytes and name.
+- **Found on:** [CAPTAIN TSUBASA 2: WORLD FIGHTERS](../../dm/games/01009720213B0000/README.md), all five supplied DLCs. `test_romfs_read.py` also exercises a synthetic archive with a literal `D:` directory.
+
 ### PFS0 file-name table missing its final NUL
 
 - **Symptom:** package identification stops with `ValueError: subsection not found` in `pfs0_names`, or LibHac reports `ResultFsPathNotFound` opening the last file of an NSP.
@@ -431,6 +438,14 @@
 - **Fix:** one file per chain version, `shader/cache/cas-<chain>.db` (`shader_cache.for_chain`). A build writes only its own file; another chain's per-shader entries never hit (their digests cover the chain), and a Metal compile it reads from an older file is copied into its own first. After a successful or reused build the NSP script moves the other files whole into `obsolete/` (`shader_cache.drop_generations`, from `prune_shader_cache`; [Unused files had no one place in the build folder](#unused-files-had-no-one-place-in-the-build-folder)): older chains', and `cas.db`, the one file of every chain from before, which is the oldest generation. A target the build compiled nothing for (iOS after a Mac-only build, the Mac after an iPhone-only one) first takes the newest other file's compiles of it, and nothing goes while the chain has no file of its own or when copying fails. `regress.py` reads the player's generations through `--readonly <shader/cache>`. A chain change copies the compiles it reuses instead of sharing them, a few GB for a large game, once.
 - **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game).
 - **Check:** `test_shader_cache.py` (`Generations`: copying on read, newest generation first, other chains' shaders never hit, dropping older files with the other target kept, a folder as the read-only cache), `test_nsp_mac.py` (`test_older_compile_caches_go_with_a_build`).
+
+### A partial Mac build creates a database at the cache directory path
+
+- **Symptom:** a fresh `--seen-shaders` build succeeds. A later full build stops with `NotADirectoryError` while removing `shader/cache/b-<chain>.img`.
+- **Cause:** the packer passes `shader/cache` as `DMSH_CAS` on partial builds. When that path is absent, `dmsh_build.py` interprets it as the name of a SQLite file.
+- **Fix:** `build_shaders` creates the cache directory before calling the compiler. For an existing misplaced database, it folds in the SQLite write-ahead log and moves the file to `shader/cache/cas.db`, where the compiler can reuse its Metal compilations.
+- **Found on:** [Mortal Kombat 11](../../dm/games/0100F2200C984000/README.md), switching from its first partial Mac build to a full one. The bug can affect any fresh NVN partial build.
+- **Check:** `test_nsp_mac_app.py` (`SeenShaders`) checks the directory before a partial compile and retrieves a saved Metal compile after the full build recovers a misplaced database.
 
 ### A new compile cache on an exFAT drive is "a readonly database"
 

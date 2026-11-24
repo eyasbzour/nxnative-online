@@ -93,19 +93,24 @@ def kind(m):   # a short name for what a module is: its NintendoSDK component, G
     return areas.most_common(1)[0][0] if areas else '?'
 
 
-def romfs_files(romfs):   # (path, size, first 32 bytes) of every RomFS file: from nx_extract's manifest, or read from a RomFS folder
+def _romfs_entries(romfs):   # (path, size, first 32 bytes, own) of every RomFS file: from a manifest or RomFS folder; own is False on sibling-program rows of a multi-program NUP manifest
     romfs = Path(romfs)
     if romfs.is_file() and not is_image(romfs):
         for line in romfs.read_text(errors='replace').splitlines():
             if line.startswith('#'): continue
-            path, size, head = line.split('\t'); yield path, int(size), bytes.fromhex(head)
+            path, size, head, *scope = line.split('\t')
+            yield path, int(size), bytes.fromhex(head), not (scope and scope[0])
         return
     for d, _, names in os.walk(romfs):
         for n in names:
             if os.fsencode(n) in ARTIFACTS: continue
             p = Path(d) / n
             with open(p, 'rb') as f: head = f.read(32)
-            yield '/' + str(p.relative_to(romfs)), p.stat().st_size, head
+            yield '/' + str(p.relative_to(romfs)), p.stat().st_size, head, True
+
+
+def romfs_files(romfs):   # (path, size, first 32 bytes) of every RomFS file: from nx_extract's manifest, or read from a RomFS folder
+    for path, size, head, _ in _romfs_entries(romfs): yield path, size, head
 
 
 def npdm(path):   # (system resource size, program ID) from main.npdm; a non-zero system resource means virtual address memory (Engage 16 MB); (0, None) without the file
@@ -153,7 +158,7 @@ def facts_of(exefs, romfs):
     # RomFS: counts by top level (two levels: Unity keeps everything under Data/), extension and header magic
     R = F['romfs'] = {'n': 0, 'bytes': 0, 'tops': collections.Counter(), 'topb': collections.Counter(), 'exts': collections.Counter(), 'extb': collections.Counter(), 'extc': collections.Counter(),
                       'mags': collections.Counter(), 'magb': collections.Counter(), 'dirs': collections.Counter(), 'biggest': (0, ''), 'root': set()}
-    for path, size, h in romfs_files(romfs):
+    for path, size, h, own in _romfs_entries(romfs):
         R['n'] += 1; R['bytes'] += size
         parts = path.strip('/').split('/')
         top = '/'.join(parts[:2]) if len(parts) > 2 else parts[0] if len(parts) > 1 else '(root)'
@@ -162,7 +167,7 @@ def facts_of(exefs, romfs):
         R['exts'][ext or '(none)'] += 1; R['extb'][ext] += size
         if len(parts) > 1: R['dirs'][parts[0]] += 1
         else: R['root'].add(parts[0])
-        R['biggest'] = max(R['biggest'], (size, path.strip('/')))
+        if own: R['biggest'] = max(R['biggest'], (size, path.strip('/')))
         mag = next((n for m, n in MAGICS if h.startswith(m)), None)
         if mag: R['mags'][mag] += 1; R['magb'][mag] += size
         if mag in PACKED: R['extc'][ext] += 1
@@ -427,11 +432,15 @@ def build_sources(exefs, romfs, modules):
             with open(os.path.join(d, n), 'rb') as f: oodle_ue3 += ue3_oodle_package(f.read(0x1000))
     import ttdat
     oodle_ttdat = sum(ttdat.needs_oodle(os.path.join(d, n)) for d, _, names in os.walk(romfs) for n in names if n.lower().endswith('.dat'))
-    anvil_forges = 0   # Ubisoft Anvil / Scimitar forges ('scimitar\0', Immortals Fenyx Rising, The Ezio Collection): every entry's blocks are Oodle, decoded with the game's own decoder (shader_split.py forge_jobs)
+    import forge
+    anvil_forges = 0   # The Oodle versions use the game's decoder. The v27 reader decodes LZO1X directly.
     for d, _, names in os.walk(romfs):
         for n in names:
             if n.endswith('.forge'):
-                with open(os.path.join(d, n), 'rb') as f: anvil_forges += f.read(9) == b'scimitar\0'
+                with open(os.path.join(d, n), 'rb') as f: head = f.read(13)
+                if len(head) == 13 and forge.is_forge(head):
+                    version = forge.version(head)
+                    anvil_forges += version in forge.KNOWN_VERSIONS and version != forge.SCIMITAR_LZO_VERSION
     import frostbite   # Frostbite's superbundles (EA SPORTS FC 27): every item of the cas files is Oodle Leviathan, decoded with the game's own decoder
     return shader_sources(imports, glsl_src, glslc_mods, spirv, len(uepak.unreal_paks(str(romfs), inline=False, mains=[exefs / 'main'])), trinity, len(uepak.unreal_paks(str(romfs), inline=True, mains=[exefs / 'main'])), gl_names, gl_src, gl_files, oodle_pkz, nro_imp,
                           oodle_gfpak=oodle_gfpak, oodle_ue3=oodle_ue3, frostbite=frostbite.is_frostbite(str(romfs)), romfs_glsl=romfs_glsl, oodle_ttdat=oodle_ttdat, gl_fixed_calls=fixed_calls, vk_named=vk_named, anvil_forges=anvil_forges)

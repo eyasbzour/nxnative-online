@@ -17,7 +17,7 @@
 #   or in a terminal: python3 scripts/build_ipa_from_nsp.py <NSP folder> -k <prod.keys> [options] (values given on the command line override "Settings", -h lists every option;
 #   without keyboard input a missing value is not asked for but reported as an error; exit code 0 on success, 1 on error, 130 when interrupted, 143 when stopped by SIGTERM, 129 when the terminal closed (SIGHUP)). Command-line options entered in Spyder's run configuration work the same way.
 # Uses only three things: this repository, a folder holding one game's NSPs (the base game, with or without an update; DLC NSPs, when present, are packed too and unlock the add-on content already in the game), and prod.keys.
-#   Instead of NSPs, the folder may hold the game's files as a dump (base/, updates/<version>/, dlc/; scripts/pack_dump.py lists the layout): that needs no prod.keys. A game with no profile is surveyed from those files. A dump has no control data: the name comes from the profile (a provisional one takes the folder's name), and the app has no icon unless --icon / ICON gives it one (--fallback-icon / FALLBACK_ICON: only when the game has none).
+#   Instead of NSPs, the folder may hold the game's files as a dump (base/, updates/<version>/, dlc/; scripts/pack_dump.py lists the layout): that needs no prod.keys. A game with no profile is surveyed from those files. A dump has no control data: the name comes from the profile (a provisional one takes the folder's name), and the app has no icon unless --icon / ICON gives it one (--fallback-icon / FALLBACK_ICON: only when the game has none); a Mac app rebuilt in place keeps the icon it had.
 #   Or the folder may hold the game as one NUP container (a .nup file: base game, updates and DLC; scripts/pack_nup.py), or the .nup file may be given in its place: it needs no prod.keys, like a dump; a game with no profile is surveyed from the container's files (its newest version's code modules and RomFS file headers),
 #   and its RomFS images are written straight from it; the name, display version and icon come from the NACP and icon it carries, else as for a dump (its name record is a packer's label, not the game's), and --icon / ICON gives the app an icon when it carries none.
 #   The newest version in the folder is packed. A version the profile registers (when its shader tables cover it and every version in shader_versions is in the folder) is built from the profile as it is; any other
@@ -820,23 +820,24 @@ def survey_dump(src, out):
 
 def survey_nup(n, k, base, out):
     """A NUP package's files as nx_extract --manifest leaves an NSP's for the survey, without writing the RomFS: out/ExeFS, out/romfs_manifest.tsv (path, size and first 32 bytes of every
-    RomFS file, then the other programs' files it lacks), out/romfs_nro (the NRO modules, whole: their imports decide the graphics API and the modules) and the package's control data, else its
-    base game's. Returns the files listed"""
+    RomFS file, then the other programs' files it lacks, tagged program:<index> in an optional fourth column so romfs_marker stays in the packed program's own RomFS), out/romfs_nro (the NRO
+    modules, whole: their imports decide the graphics API and the modules) and the package's control data, else its base game's. Returns the files listed"""
     out.mkdir(parents=True)
     try: pack_nup.exefs(n, k, out / 'ExeFS')
     except pack_nup.Error as e: raise BuildError(str(e)) from e
     rows, seen = [], set()
-    def walk(d, pre):
+    def walk(d, pre, scope=''):
         for name, isdir, i in n.children(d):
             p = pre + '/' + os.fsdecode(name)
-            if isdir: walk(i, p); continue
+            if isdir: walk(i, p, scope); continue
             if p in seen: continue   # a path the program's own RomFS has
-            seen.add(p); rows.append(f'{p}\t{n.files[i][1]}\t{n.head(i).hex()}\n')
+            seen.add(p); rows.append(f'{p}\t{n.files[i][1]}\t{n.head(i).hex()}' + (f'\t{scope}\n' if scope else '\n'))
             if p.lower().endswith('.nro'):
                 o = out / 'romfs_nro' / p.lstrip('/'); o.parent.mkdir(parents=True, exist_ok=True)
                 with open(o, 'wb') as f: n.copy(i, f)
     try:
-        for d in [pack_nup.romfs_of(k, base), *pack_nup.sibling_romfs(n, k).values()]: walk(d, '')   # then the other programs' RomFS, which this one mounts by program index (a Switch 2 Edition's game data is its Switch 1 program's)
+        walk(pack_nup.romfs_of(k, base), '')
+        for idx, d in pack_nup.sibling_romfs(n, k).items(): walk(d, '', f'program:{idx}')   # then the other programs' RomFS, which this one mounts by program index (a Switch 2 Edition's game data is its Switch 1 program's)
         pack_nup.control(k, out, pack_nup.app_package(n) if base is None else base, say=say)   # what an update lacks, from its base game (or the metadata record)
     except pack_nup.Error as e: raise BuildError(str(e)) from e
     (out / 'romfs_manifest.tsv').write_text(MANIFEST_HEAD + ''.join(rows))
@@ -2739,7 +2740,16 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key=None, mac=False, se
     ios, log = sh / 'ios', logs / 'dmsh_build.log'
     PROG.stage('Mac shaders' if mac else 'iOS shaders')
     chain = chain_of(repo)
-    shader_cache.adopt(sh / 'cache/cas', shader_cache.chain_file(sh / 'cache', chain), say)
+    cache = sh / 'cache'
+    misplaced = sh / 'partial-cache.db'
+    if cache.is_file():
+        # A fresh partial build used this path as a database when the cache directory did not exist.
+        shader_cache.Store(cache, say).close()   # fold a stopped build's WAL into the file before moving it
+        cache.rename(misplaced)
+    cache.mkdir(parents=True, exist_ok=True)   # DMSH_CAS treats an absent path as a database file
+    if misplaced.is_file():
+        misplaced.rename(cache / shader_cache.LEGACY)
+    shader_cache.adopt(cache / 'cas', shader_cache.chain_file(cache, chain), say)
     out = sh / 'partial' if seen else sh / 'cache' if mac else ios
     libs, kf, kmac = out / f'b-{chain}', ios / f'b-{chain}.key', out / 'key' if seen else sh / f'mac-b-{chain}.key'
     pso_pairs, geo_pairs = (side_table(g, sh / 'pkg', n) for n in ('pso_pairs.tsv', 'geo_pairs.tsv'))   # the split's copies are shader inputs too (vs_pad, dmsh_chain.mesh_pairs)
@@ -2770,7 +2780,7 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key=None, mac=False, se
     if ALLOW_OTHER_METAL: benv['DM_ALLOW_OTHER_METAL'] = '1'
     if mac: del benv['IOSOUT']   # dmsh_build.py builds the iOS libraries only with IOSOUT
     elif pull is False: benv['DMSH_IOS_PULL'] = '0'   # nothing in this app reads them
-    if seen: benv['DMSH_CAS'] = str(sh / 'cache')   # the full build's folder: this chain's file there
+    if seen: benv['DMSH_CAS'] = str(cache)   # the full build's folder: this chain's file there
     benv['DMSH_TABLE_MEMO'] = str(sh / 'cache')   # c1_guard.py / cb_extent.py keep each shader's answer there: a build that restores every shader makes the tables in seconds
     prog = sh / 'progress.json'; rmtree(prog); benv['DMSH_PROGRESS'] = str(prog)   # dmsh_build.py's progress (ShaderWatch)
     try: PROG.watch(ShaderWatch(prog))
@@ -3364,6 +3374,26 @@ def icon_file(value, option):
     return p
 
 
+def kept_icon(app, work):
+    """The icon of the Mac app a build is about to replace, as a PNG in the work folder, for a game with no icon of its own (a dump, a NUP without one) when no icon option is given:
+    a rebuild from a terminal then keeps the icon the app had, as one from a front end does (it passes the old icon as --fallback-icon). None when there is no such app or icon"""
+    import plistlib
+    from xml.parsers.expat import ExpatError
+    try:
+        with open(app / 'Contents/Info.plist', 'rb') as f: info = plistlib.load(f)
+    except (OSError, ValueError, ExpatError): return None
+    name = info.get('CFBundleIconFile') if isinstance(info, dict) else None
+    if not isinstance(name, str) or not name or Path(name).name != name: return None
+    res = app / 'Contents/Resources'
+    src = res / name if (res / name).is_file() else res / (name if name.endswith('.icns') else name + '.icns')
+    if not src.is_file(): return None
+    out = work / 'kept-icon.png'
+    out.unlink(missing_ok=True)
+    try: r = subprocess.run(['sips', '-s', 'format', 'png', str(src), '--out', str(out)], capture_output=True)
+    except OSError: return None
+    return out if r.returncode == 0 and out.is_file() else None
+
+
 def app_icon(given, spare, *dirs):
     """The image the app is given, and whether it is the fallback: --icon / ICON (given), else the game icon nx_extract saved from the control data (English, icon.jpg; in dirs, the packed version's
     first, then the base game's), which a dump never has and a NUP may lack, else --fallback-icon / FALLBACK_ICON (spare), which never replaces a game's own. None without any"""
@@ -3694,9 +3724,13 @@ def main(args=None):
         except ValueError as e: raise BuildError(str(e)) from e
     app_version = app_version_of(game, None if nup else base, g, pkg_ver, nup_label, nup_base=fam['base'] if nup else None)
     if mac_pack and not (args.out or OUT_IPA): out_ipa = work.parent / f'{mac_app_name(app_name)}{"-provisional" if shadowed else ""}.app'
+    kept = False
+    if mac_pack and getattr(args, 'in_programs', None) is None and not user_icon and not spare_icon and not any((d / 'icon.jpg').exists() for d in (game, base)) and out_ipa and Path(out_ipa).is_dir():
+        spare_icon = kept_icon(Path(out_ipa), work)
+        kept = spare_icon is not None
     icon, stand_in = app_icon(user_icon, spare_icon, game, base)
     if (not mac or mac_pack) and getattr(args, 'in_programs', None) is None:   # an app is made, once: a program packed with the application's first (in_programs) is part of its app
-        if stand_in: say(f'no game icon: the app takes the fallback icon {spare_icon} (--fallback-icon / FALLBACK_ICON)')
+        if stand_in: say(f'no game icon: the app keeps the icon it has ({Path(out_ipa).name})' if kept else f'no game icon: the app takes the fallback icon {spare_icon} (--fallback-icon / FALLBACK_ICON)')
         say_game(app, app_name, app_version or '1.0', bundle_id, None if prepare_xcode else out_ipa, icon)
     # the game language: Horizon gives the game one of the languages its control data lists (the packed version's, which an update may extend), so the one packed must be among them
     control = languages_control(game, base)
